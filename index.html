@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI 스마트 플래시카드 메이커</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.6.0/mammoth.browser.min.js"></script>
+    <style>
+        :root {
+            --primary: #4ca1af;
+            --dark: #2c3e50;
+            --bg: #f4f7f6;
+            --success: #27ae60;
+            --danger: #e74c3c;
+            --warning: #f39c12;
+        }
+        body { font-family: 'Pretendard', sans-serif; margin: 0; display: flex; height: 100vh; background-color: var(--bg); color: #333; }
+        
+        /* 사이드바 (조건 3: 기록 보관) */
+        .sidebar { width: 280px; background-color: var(--dark); color: white; padding: 20px; display: flex; flex-direction: column; box-shadow: 2px 0 5px rgba(0,0,0,0.1); }
+        .sidebar h2 { font-size: 1.2rem; margin-top: 0; border-bottom: 2px solid #34495e; padding-bottom: 10px; }
+        .history-list { list-style: none; padding: 0; margin: 0; overflow-y: auto; flex: 1; }
+        .history-item { background-color: #34495e; margin-bottom: 10px; padding: 12px; border-radius: 6px; cursor: pointer; transition: 0.2s; font-size: 0.9rem; display: flex; justify-content: space-between; align-items: center;}
+        .history-item:hover { background-color: var(--primary); }
+        .delete-btn { background: none; border: none; color: #bdc3c7; cursor: pointer; font-size: 1rem; }
+        .delete-btn:hover { color: var(--danger); }
+
+        /* 메인 영역 */
+        .main-content { flex: 1; padding: 40px; display: flex; flex-direction: column; align-items: center; overflow-y: auto; position: relative; }
+        
+        /* API 설정 바 */
+        .api-box { width: 100%; max-width: 600px; background: #e0eae9; padding: 10px 20px; border-radius: 8px; margin-bottom: 20px; display: flex; gap: 10px; align-items: center; box-sizing: border-box;}
+        .api-box input { flex: 1; padding: 6px; border: 1px solid #ccc; border-radius: 4px; }
+
+        /* 섹션 공통 스타일 */
+        .card-box { background: white; padding: 30px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); text-align: center; width: 100%; max-width: 600px; box-sizing: border-box; }
+        
+        /* 업로드 섹션 (조건 1) */
+        .upload-zone { border: 2px dashed #b2bec3; padding: 30px; border-radius: 8px; cursor: pointer; margin: 20px 0; transition: 0.3s; }
+        .upload-zone:hover { border-color: var(--primary); background-color: #fafbfc; }
+        input[type="file"] { display: none; }
+        button { background-color: var(--primary); color: white; border: none; padding: 12px 24px; border-radius: 6px; cursor: pointer; font-size: 1rem; font-weight: bold; transition: 0.2s; }
+        button:hover { background-color: var(--dark); }
+
+        /* 로딩 뷰 */
+        #loadingSection { display: none; }
+        .spinner { border: 4px solid rgba(0,0,0,0.1); width: 36px; height: 36px; border-radius: 50%; border-left-color: var(--primary); animation: spin 1s linear infinite; margin: 20px auto; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
+
+        /* 퀴즈 게임 뷰 (3D 플래시카드) */
+        #quizSection { display: none; }
+        .flashcard-container { perspective: 1000px; width: 100%; height: 280px; margin: 20px 0; cursor: pointer; }
+        .flashcard { width: 100%; height: 100%; position: relative; transform-style: preserve-3d; transition: transform 0.6s; }
+        .flashcard.flipped { transform: rotateY(180deg); }
+        .card-face { position: absolute; width: 100%; height: 100%; backface-visibility: hidden; display: flex; align-items: center; justify-content: center; padding: 30px; box-sizing: border-box; border-radius: 15px; font-size: 1.4rem; font-weight: bold; box-shadow: 0 6px 18px rgba(0,0,0,0.1); }
+        .card-front { background-color: white; color: var(--dark); border: 2px solid #edf2f7; }
+        .card-back { background-color: #f8f9fa; color: #2980b9; transform: rotateY(180deg); border: 2px solid #d5dbdb; }
+        .controls { display: flex; justify-content: center; gap: 15px; margin-top: 20px; }
+        .btn-correct { background-color: var(--success); }
+        .btn-incorrect { background-color: var(--danger); }
+
+        /* 결과 뷰 (조건 2) */
+        #resultSection { display: none; }
+        .btn-review { background-color: var(--warning); }
+    </style>
+</head>
+<body>
+
+    <div class="sidebar">
+        <h2>📂 내 학습 기록</h2>
+        <ul class="history-list" id="historyList"></ul>
+    </div>
+
+    <div class="main-content">
+        
+        <div class="api-box">
+            <label style="font-size:0.85rem; font-weight:bold;">Gemini API Key:</label>
+            <input type="password" id="apiKeyInput" placeholder="AI 퀴즈 생성을 원하시면 키를 입력하세요 (비워두면 자동 생성)">
+        </div>
+
+        <div class="card-box" id="uploadSection">
+            <h2>📄 스마트 플래시카드 메이커</h2>
+            <p>PDF 또는 Word(.docx) 파일을 업로드하면 AI가 핵심 퀴즈 카드를 만들어 줍니다.</p>
+            <div class="upload-zone" onclick="document.getElementById('fileInput').click()">
+                <p id="uploadStatus">📂 클릭하여 파일 선택 또는 드래그</p>
+                <span id="fileNameDisplay" style="color:var(--primary); font-weight:bold;"></span>
+            </div>
+            <input type="file" id="fileInput" accept=".pdf, .docx" onchange="handleFileSelect(event)">
+            <button onclick="processFileAndGenerateQuiz()">✨ 퀴즈 생성하기</button>
+        </div>
+
+        <div class="card-box" id="loadingSection">
+            <h2 id="loadingText">문서를 분석하는 중입니다...</h2>
+            <div class="spinner"></div>
+            <p style="color:#7f8c8d; font-size:0.9rem;">파일 크기와 AI 응답 속도에 따라 최대 15초가 소요될 수 있습니다.</p>
+        </div>
+
+        <div class="card-box" id="quizSection">
+            <h3 id="quizTitle" style="color:var(--dark); margin:0;">퀴즈</h3>
+            <p id="progressText" style="color:#7f8c8d; margin:5px 0 15px 0;">1 / 5</p>
+            
+            <div class="flashcard-container" onclick="flipCard()">
+                <div class="flashcard" id="flashcard">
+                    <div class="card-face card-front" id="cardFront">질문문항</div>
+                    <div class="card-face card-back" id="cardBack">정답내용</div>
+                </div>
+            </div>
+            <p style="font-size: 0.85rem; color: #95a5a6; margin-bottom:20px;">💡 카드를 터치/클릭하면 뒤집힙니다.</p>
+
+            <div class="controls">
+                <button class="btn-incorrect" onclick="submitAnswer(false)">❌ 몰라요 (오답)</button>
+                <button class="btn-correct" onclick="submitAnswer(true)">⭕ 알아요 (정답)</button>
+            </div>
+        </div>
+
+        <div class="card-box" id="resultSection">
+            <h2>🎉 학습을 마쳤습니다!</h2>
+            <h1 id="scoreText" style="color:var(--primary); margin:10px 0;">0 / 0</h1>
+            <p id="resultComment">수고하셨습니다!</p>
+            <div class="controls">
+                <button onclick="goHome()">🏠 홈으로</button>
+                <button class="btn-review" id="reviewBtn" onclick="startReviewMode()">🔄 오답만 다시 풀기</button>
+            </div>
+        </div>
+
+    </div>
+
+    <script>
+        // PDF.js 워커 경로 설정
+        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.4.120/pdf.worker.min.js';
+
+        // 상태 관리 변수들
+        let selectedFile = null;
+        let extractedText = "";
+        let currentQuizList = [];
+        let incorrectList = [];
+        let currentIndex = 0;
+        let quizHistory = [];
+        let currentFileName = "";
+
+        // 페이지 로드 시 기존 기록 가져오기
+        window.onload = function() {
+            const savedHistory = localStorage.getItem('quiz_history_v1');
+            if(savedHistory) {
+                quizHistory = JSON.parse(savedHistory);
+                renderHistory();
+            }
+            // API키 세션 유지용 저장값 로드
+            const savedKey = localStorage.getItem('gemini_api_key');
+            if(savedKey) document.getElementById('apiKeyInput').value = savedKey;
+        }
+
+        // 파일 선택 감지
+        function handleFileSelect(e) {
+            selectedFile = e.target.files[0];
+            if(selectedFile) {
+                document.getElementById('fileNameDisplay').textContent = `선택됨: ${selectedFile.name}`;
+                document.getElementById('uploadStatus').style.display = 'none';
+            }
+        }
+
+        // 메인 실행 단계: 파일 읽기 -> AI(또는 로컬) 전송 -> 퀴즈화
+        async function processFileAndGenerateQuiz() {
+            if(!selectedFile) {
+                alert("파일을 먼저 선택해 주세요!");
+                return;
+            }
+
+            // API키 자동 임시저장
+            const apiKey = document.getElementById('apiKeyInput').value.trim();
+            if(apiKey) localStorage.setItem('gemini_api_key', apiKey);
+
+            switchSection('loadingSection');
+            document.getElementById('loadingText').textContent = "문서에서 텍스트를 파싱하는 중...";
+
+            try {
+                currentFileName = selectedFile.name;
+                const fileReader = new FileReader();
+                
+                if(selectedFile.name.endsWith('.pdf')) {
+                    fileReader.readAsArrayBuffer(selectedFile);
+                    fileReader.onload = async function() {
+                        const typedarray = new Uint8Array(this.result);
+                        extractedText = await parsePdf(typedarray);
+                        await generateQuizCards(extractedText, apiKey);
+                    };
+                } else if(selectedFile.name.endsWith('.docx')) {
+                    fileReader.readAsArrayBuffer(selectedFile);
+                    fileReader.onload = async function() {
+                        extractedText = await parseDocx(this.result);
+                        await generateQuizCards(extractedText, apiKey);
+                    };
+                } else {
+                    alert("지원하지 않는 확장자입니다. PDF 또는 DOCX 파일을 사용하세요.");
+                    goHome();
+                }
+            } catch(err) {
+                alert("파일 읽기 도중 오류가 발생했습니다: " + err.message);
+                goHome();
+            }
+        }
+
+        // PDF 텍스트 추출 라이브러리 핸들러
+        async function parsePdf(data) {
+            const loadingTask = pdfjsLib.getDocument({data: data});
+            const pdf = await loadingTask.promise;
+            let fullText = "";
+            // 최대 10페이지까지만 파싱 (속도 및 토큰 제한 방지)
+            const maxPages = Math.min(pdf.numPages, 10);
+            for(let i = 1; i <= maxPages; i++) {
+                const page = await pdf.getPage(i);
+                const textContent = await page.getTextContent();
+                fullText += textContent.items.map(item => item.str).join(" ") + "\n";
+            }
+            return fullText;
+        }
+
+        // Word(.docx) 텍스트 추출 라이브러리 핸들러
+        async function parseDocx(arrayBuffer) {
+            const result = await mammoth.extractRawText({arrayBuffer: arrayBuffer});
+            return result.value;
+        }
+
+        // AI 연동하여 퀴즈 데이터 생성 (또는 룰베이스 백업 생성)
+        async function generateQuizCards(text, apiKey) {
+            document.getElementById('loadingText').textContent = "AI가 학습용 플래시카드를 생성하고 있습니다...";
+
+            if(!apiKey) {
+                // 백업 가상 데이터 빌더 (API 키 없을 때 작동용 데모 기능)
+                console.log("No API Key: Generating Mock Cards from text slice.");
+                setTimeout(() => {
+                    const mockCards = [
+                        { q: `${currentFileName} 관련 질문 1: 본문의 핵심 주제는 무엇인가요?`, a: "본문의 내용을 바탕으로 요약 정리가 필요합니다. (진짜 AI 작동을 원하시면 상단에 Gemini API Key를 넣어주세요!)" },
+                        { q: "데이터 분석에서 플래시카드의 효과는?", a: "반복적인 인출 연습을 유도하여 장기 기억 형성을 돕습니다." },
+                        { q: "오답 노트의 장점은?", a: "내가 취약한 개념 위주로 압축 공부하여 메타인지를 향상시킵니다." }
+                    ];
+                    saveAndStartQuiz(mockCards);
+                }, 1500);
+                return;
+            }
+
+            // 진짜 Gemini API 호출 로직
+            try {
+                const prompt = `다음 텍스트를 읽고 학습용 플래시카드 형태의 퀴즈 5문제를 개발해줘. 대답은 JSON 배열 포맷만 출력해야 해. 주석이나 마크다운 없이 오직 JSON 데이터만 줘. 구조: [{"q": "질문", "a": "정답"}, ...] \n\n텍스트 내용:\n${text.substring(0, 4000)}`;
+                
+                const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
+                });
+                
+                const data = await response.json();
+                let rawJson = data.candidates[0].content.parts[0].text;
+                
+                // 마크다운 백틱 제거 가공
+                rawJson = rawJson.replace(/```json/g, "").replace(/```/g, "").trim();
+                const parsedQuiz = JSON.parse(rawJson);
+                saveAndStartQuiz(parsedQuiz);
+
+            } catch (error) {
+                alert("AI 퀴즈 생성 도중 에러가 발생했습니다. 키를 확인하시거나 잠시 후 다시 시도하세요. (기본 퀴즈로 대체합니다)");
+                saveAndStartQuiz([{q:"에러 발생으로 임시 문제 제공: 파일명은?", a: currentFileName}]);
+            }
+        }
+
+        // 퀴즈 히스토리 로컬저장소 세팅 및 시작
+        function saveAndStartQuiz(quizData) {
+            const record = {
+                id: Date.now(),
+                title: currentFileName,
+                date: new Date().toLocaleDateString(),
+                cards: quizData
+            };
+            quizHistory.unshift(record);
+            localStorage.setItem('quiz_history_v1', JSON.stringify(quizHistory));
+            renderHistory();
+            initQuizSession(quizData, currentFileName);
+        }
+
+        // 사이드바 UI 갱신 (조건 3)
+        function renderHistory() {
+            const listElement = document.getElementById('historyList');
+            listElement.innerHTML = "";
+            quizHistory.forEach(item => {
+                const li = document.createElement('li');
+                li.className = 'history-item';
+                li.innerHTML = `
+                    <div style="flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;" onclick="loadHistoryQuiz(${item.id})">
+                        <strong>📄 ${item.title}</strong><br>
+                        <small style="color:#bdc3c7; font-size:0.75rem;">${item.date}</small>
+                    </div>
+                    <button class="delete-btn" onclick="deleteHistory(event, ${item.id})">✕</button>
+                `;
+                listElement.appendChild(li);
+            });
+        }
+
+        // 저장소에서 퀴즈 꺼내 다시 풀기 (조건 3)
+        function loadHistoryQuiz(id) {
+            const found = quizHistory.find(item => item.id === id);
+            if(found) {
+                currentFileName = found.title;
+                initQuizSession(found.cards, found.title);
+            }
+        }
+
+        // 히스토리 항목 삭제
+        function deleteHistory(event, id) {
+            event.stopPropagation(); // li 클릭 이벤트 버블링 차단
+            quizHistory = quizHistory.filter(item => item.id !== id);
+            localStorage.setItem('quiz_history_v1', JSON.stringify(quizHistory));
+            renderHistory();
+        }
+
+        // 퀴즈 엔진 상태 초기화
+        function initQuizSession(cards, title) {
+            currentQuizList = [...cards];
+            incorrectList = [];
+            currentIndex = 0;
+            
+            document.getElementById('quizTitle').textContent = title;
+            switchSection('quizSection');
+            setupCardView();
+        }
+
+        // 플래시카드 데이터 세팅 및 화면 노출
+        function setupCardView() {
+            if(currentIndex >= currentQuizList.length) {
+                finishQuizSession();
+                return;
+            }
+            // 카드 상태 초기화 (앞면으로)
+            document.getElementById('flashcard').classList.remove('flipped');
+            
+            document.getElementById('progressText').textContent = `${currentIndex + 1} / ${currentQuizList.length}`;
+            document.getElementById('cardFront').textContent = currentQuizList[currentIndex].q;
+            document.getElementById('cardBack').textContent = currentQuizList[currentIndex].a;
+        }
+
+        // 3D 회전 애니메이션 토글
+        function flipCard() {
+            document.getElementById('flashcard').classList.toggle('flipped');
+        }
+
+        // 알아요/몰라요 답변 판정
+        function submitAnswer(isCorrect) {
+            if(!isCorrect) {
+                incorrectList.push(currentQuizList[currentIndex]);
+            }
+            currentIndex++;
+            // 약간의 딜레이를 주어 뒤집기가 복구된 후 카드가 바뀌게 처리
+            document.getElementById('flashcard').classList.remove('flipped');
+            setTimeout(() => {
+                setupCardView();
+            }, 200);
+        }
+
+        // 한 게임 세션이 끝났을 때
+        function finishQuizSession() {
+            switchSection('resultSection');
+            const score = currentQuizList.length - incorrectList.length;
+            document.getElementById('scoreText').textContent = `${score} / ${currentQuizList.length}`;
+            
+            const reviewBtn = document.getElementById('reviewBtn');
+            if(incorrectList.length > 0) {
+                reviewBtn.style.display = "inline-block";
+                document.getElementById('resultComment').textContent = `틀린 문항이 ${incorrectList.length}개 있습니다. 복습을 시작해 보세요!`;
+            } else {
+                reviewBtn.style.display = "none";
+                document.getElementById('resultComment').textContent = "모든 플래시카드를 완벽하게 맞히셨습니다! 🎉";
+            }
+        }
+
+        // 오답 리스트만 모아서 새로 퀴즈 셋업 (조건 2)
+        function startReviewMode() {
+            if(incorrectList.length === 0) return;
+            initQuizSession(incorrectList, `🔄 오답 복습: ${currentFileName}`);
+        }
+
+        // 섹션 전환 유틸리티
+        function switchSection(targetId) {
+            document.getElementById('uploadSection').style.display = 'none';
+            document.getElementById('loadingSection').style.display = 'none';
+            document.getElementById('quizSection').style.display = 'none';
+            document.getElementById('resultSection').style.display = 'none';
+            
+            document.getElementById(targetId).style.display = 'block';
+        }
+
+        // 초기 화면 복귀
+        function goHome() {
+            selectedFile = null;
+            document.getElementById('fileInput').value = "";
+            document.getElementById('fileNameDisplay').textContent = "";
+            document.getElementById('uploadStatus').style.display = 'block';
+            switchSection('uploadSection');
+        }
+    </script>
+</body>
+</html>
