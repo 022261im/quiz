@@ -53,7 +53,7 @@
         .flashcard-container { perspective: 1000px; width: 100%; height: 280px; margin: 20px 0; cursor: pointer; }
         .flashcard { width: 100%; height: 100%; position: relative; transform-style: preserve-3d; transition: transform 0.6s; }
         .flashcard.flipped { transform: rotateY(180deg); }
-        .card-face { position: absolute; width: 100%; height: 100%; backface-visibility: hidden; display: flex; align-items: center; justify-content: center; padding: 30px; box-sizing: border-box; border-radius: 15px; font-size: 1.4rem; font-weight: bold; box-shadow: 0 6px 18px rgba(0,0,0,0.1); }
+        .card-face { position: absolute; width: 100%; height: 100%; backface-visibility: hidden; display: flex; align-items: center; justify-content: center; padding: 30px; box-sizing: border-box; border-radius: 15px; font-size: 1.3rem; font-weight: bold; box-shadow: 0 6px 18px rgba(0,0,0,0.1); white-space: pre-wrap; line-height: 1.5; }
         .card-front { background-color: white; color: var(--dark); border: 2px solid #edf2f7; }
         .card-back { background-color: #f8f9fa; color: #2980b9; transform: rotateY(180deg); border: 2px solid #d5dbdb; }
         .controls { display: flex; justify-content: center; gap: 15px; margin-top: 20px; }
@@ -76,12 +76,12 @@
         
         <div class="api-box">
             <label style="font-size:0.85rem; font-weight:bold;">Gemini API Key:</label>
-            <input type="password" id="apiKeyInput" placeholder="AI 퀴즈 생성을 원하시면 키를 입력하세요 (비워두면 자동 생성)">
+            <input type="password" id="apiKeyInput" placeholder="고급 AI 서술형 퀴즈를 원하시면 입력하세요 (비워두면 무료 자동 생성)">
         </div>
 
         <div class="card-box" id="uploadSection">
             <h2>📄 스마트 플래시카드 메이커</h2>
-            <p>PDF 또는 Word(.docx) 파일을 업로드하면 AI가 핵심 퀴즈 카드를 만들어 줍니다.</p>
+            <p>PDF 또는 Word(.docx) 파일을 업로드하면 핵심 퀴즈 카드를 만들어 줍니다.</p>
             <div class="upload-zone" onclick="document.getElementById('fileInput').click()">
                 <p id="uploadStatus">📂 클릭하여 파일 선택 또는 드래그</p>
                 <span id="fileNameDisplay" style="color:var(--primary); font-weight:bold;"></span>
@@ -93,7 +93,7 @@
         <div class="card-box" id="loadingSection">
             <h2 id="loadingText">문서를 분석하는 중입니다...</h2>
             <div class="spinner"></div>
-            <p style="color:#7f8c8d; font-size:0.9rem;">파일 크기와 AI 응답 속도에 따라 최대 15초가 소요될 수 있습니다.</p>
+            <p style="color:#7f8c8d; font-size:0.9rem;">파일을 읽고 문제 카드를 구성하고 있습니다.</p>
         </div>
 
         <div class="card-box" id="quizSection">
@@ -139,14 +139,13 @@
         let quizHistory = [];
         let currentFileName = "";
 
-        // 페이지 로드 시 기존 기록 가져오기
+        // 페이지 로드 시 로컬스토리지에서 기존 기록 불러오기 (조건 3)
         window.onload = function() {
-            const savedHistory = localStorage.getItem('quiz_history_v1');
+            const savedHistory = localStorage.getItem('quiz_history_v2');
             if(savedHistory) {
                 quizHistory = JSON.parse(savedHistory);
                 renderHistory();
             }
-            // API키 세션 유지용 저장값 로드
             const savedKey = localStorage.getItem('gemini_api_key');
             if(savedKey) document.getElementById('apiKeyInput').value = savedKey;
         }
@@ -160,14 +159,13 @@
             }
         }
 
-        // 메인 실행 단계: 파일 읽기 -> AI(또는 로컬) 전송 -> 퀴즈화
+        // 파일 파싱 및 퀴즈 생성 트리거
         async function processFileAndGenerateQuiz() {
             if(!selectedFile) {
                 alert("파일을 먼저 선택해 주세요!");
                 return;
             }
 
-            // API키 자동 임시저장
             const apiKey = document.getElementById('apiKeyInput').value.trim();
             if(apiKey) localStorage.setItem('gemini_api_key', apiKey);
 
@@ -196,18 +194,17 @@
                     goHome();
                 }
             } catch(err) {
-                alert("파일 읽기 도중 오류가 발생했습니다: " + err.message);
+                alert("파일 파싱 실패: " + err.message);
                 goHome();
             }
         }
 
-        // PDF 텍스트 추출 라이브러리 핸들러
+        // PDF 텍스트 추출 가공
         async function parsePdf(data) {
             const loadingTask = pdfjsLib.getDocument({data: data});
             const pdf = await loadingTask.promise;
             let fullText = "";
-            // 최대 10페이지까지만 파싱 (속도 및 토큰 제한 방지)
-            const maxPages = Math.min(pdf.numPages, 10);
+            const maxPages = Math.min(pdf.numPages, 10); // 최대 10페이지 제한
             for(let i = 1; i <= maxPages; i++) {
                 const page = await pdf.getPage(i);
                 const textContent = await page.getTextContent();
@@ -216,55 +213,76 @@
             return fullText;
         }
 
-        // Word(.docx) 텍스트 추출 라이브러리 핸들러
+        // Word 텍스트 추출 가공
         async function parseDocx(arrayBuffer) {
             const result = await mammoth.extractRawText({arrayBuffer: arrayBuffer});
             return result.value;
         }
 
-        // AI 연동하여 퀴즈 데이터 생성 (또는 룰베이스 백업 생성)
+        // [하이브리드 엔진] API Key 유무에 따른 분기 처리
         async function generateQuizCards(text, apiKey) {
-            document.getElementById('loadingText').textContent = "AI가 학습용 플래시카드를 생성하고 있습니다...";
+            document.getElementById('loadingText').textContent = "핵심 내용 위주로 플래시카드를 구성하고 있습니다...";
 
-            if(!apiKey) {
-                // 백업 가상 데이터 빌더 (API 키 없을 때 작동용 데모 기능)
-                console.log("No API Key: Generating Mock Cards from text slice.");
-                setTimeout(() => {
-                    const mockCards = [
-                        { q: `${currentFileName} 관련 질문 1: 본문의 핵심 주제는 무엇인가요?`, a: "본문의 내용을 바탕으로 요약 정리가 필요합니다. (진짜 AI 작동을 원하시면 상단에 Gemini API Key를 넣어주세요!)" },
-                        { q: "데이터 분석에서 플래시카드의 효과는?", a: "반복적인 인출 연습을 유도하여 장기 기억 형성을 돕습니다." },
-                        { q: "오답 노트의 장점은?", a: "내가 취약한 개념 위주로 압축 공부하여 메타인지를 향상시킵니다." }
-                    ];
-                    saveAndStartQuiz(mockCards);
-                }, 1500);
-                return;
+            // 1. API 키가 존재할 경우: 진짜 고급 AI 연동
+            if (apiKey) {
+                try {
+                    const prompt = `다음 텍스트를 읽고 중요한 내용 위주로 학습용 플래시카드 형태의 퀴즈 5문제를 개발해줘. 대답은 JSON 배열 포맷만 출력해야 해. 주석이나 마크다운 없이 오직 JSON 데이터만 줘. 구조: [{"q": "질문", "a": "정답"}, ...] \n\n텍스트 내용:\n${text.substring(0, 4000)}`;
+                    
+                    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
+                    });
+                    
+                    const data = await response.json();
+                    let rawJson = data.candidates[0].content.parts[0].text;
+                    rawJson = rawJson.replace(/```json/g, "").replace(/```/g, "").trim();
+                    const parsedQuiz = JSON.parse(rawJson);
+                    saveAndStartQuiz(parsedQuiz);
+                    return;
+                } catch (error) {
+                    console.log("AI 엔진 호출 실패, 자체 로컬 엔진으로 전환합니다.");
+                }
             }
 
-            // 진짜 Gemini API 호출 로직
-            try {
-                const prompt = `다음 텍스트를 읽고 학습용 플래시카드 형태의 퀴즈 5문제를 개발해줘. 대답은 JSON 배열 포맷만 출력해야 해. 주석이나 마크다운 없이 오직 JSON 데이터만 줘. 구조: [{"q": "질문", "a": "정답"}, ...] \n\n텍스트 내용:\n${text.substring(0, 4000)}`;
+            // 2. API 키가 없을 경우: 브라우저 자체 빈칸 채우기 추론 알고리즘 작동 (100% 무료 자동)
+            setTimeout(() => {
+                // 문장 부호를 기준으로 정제하여 배열화
+                const sentences = text.split(/[.!?]\s+/).map(s => s.trim()).filter(s => s.length > 20);
                 
-                const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${apiKey}`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] })
-                });
-                
-                const data = await response.json();
-                let rawJson = data.candidates[0].content.parts[0].text;
-                
-                // 마크다운 백틱 제거 가공
-                rawJson = rawJson.replace(/```json/g, "").replace(/```/g, "").trim();
-                const parsedQuiz = JSON.parse(rawJson);
-                saveAndStartQuiz(parsedQuiz);
+                if (sentences.length === 0) {
+                    saveAndStartQuiz([{ q: "문서 내용이 비어있거나 너무 짧습니다. 파일명을 맞혀보세요.", a: currentFileName }]);
+                    return;
+                }
 
-            } catch (error) {
-                alert("AI 퀴즈 생성 도중 에러가 발생했습니다. 키를 확인하시거나 잠시 후 다시 시도하세요. (기본 퀴즈로 대체합니다)");
-                saveAndStartQuiz([{q:"에러 발생으로 임시 문제 제공: 파일명은?", a: currentFileName}]);
-            }
+                const autoGeneratedCards = [];
+                const loopCount = Math.min(sentences.length, 5); // 최대 5문제 추출
+
+                for (let i = 0; i < loopCount; i++) {
+                    const sentence = sentences[i];
+                    const words = sentence.split(' ').filter(w => w.length >= 3);
+                    
+                    if (words.length > 2) {
+                        // 문장 속에서 무작위로 타겟 키워드 하나 선정
+                        const targetWord = words[Math.floor(Math.random() * words.length)];
+                        const questionText = sentence.replace(targetWord, " [ ________ ] ");
+                        
+                        autoGeneratedCards.push({
+                            q: `📝 문맥을 읽고 빈칸에 들어갈 알맞은 단어를 유추해 보세요!\n\n"${questionText}"`,
+                            a: `정답 키워드:\n\n${targetWord.replace(/[,.]/g, "")}`
+                        });
+                    }
+                }
+
+                if(autoGeneratedCards.length === 0) {
+                    autoGeneratedCards.push({ q: `📄 문서 수집 완료! 학습 준비가 끝난 파일의 제목은 무엇인가요?`, a: currentFileName });
+                }
+
+                saveAndStartQuiz(autoGeneratedCards);
+            }, 1000);
         }
 
-        // 퀴즈 히스토리 로컬저장소 세팅 및 시작
+        // 학습 히스토리 저장 및 시작
         function saveAndStartQuiz(quizData) {
             const record = {
                 id: Date.now(),
@@ -273,12 +291,12 @@
                 cards: quizData
             };
             quizHistory.unshift(record);
-            localStorage.setItem('quiz_history_v1', JSON.stringify(quizHistory));
+            localStorage.setItem('quiz_history_v2', JSON.stringify(quizHistory));
             renderHistory();
             initQuizSession(quizData, currentFileName);
         }
 
-        // 사이드바 UI 갱신 (조건 3)
+        // 사이드바 UI 리렌더링 (조건 3)
         function renderHistory() {
             const listElement = document.getElementById('historyList');
             listElement.innerHTML = "";
@@ -296,7 +314,7 @@
             });
         }
 
-        // 저장소에서 퀴즈 꺼내 다시 풀기 (조건 3)
+        // 기록 클릭 시 과거 퀴즈 즉시 로드 (조건 3)
         function loadHistoryQuiz(id) {
             const found = quizHistory.find(item => item.id === id);
             if(found) {
@@ -305,15 +323,15 @@
             }
         }
 
-        // 히스토리 항목 삭제
+        // 기록 항목 삭제
         function deleteHistory(event, id) {
-            event.stopPropagation(); // li 클릭 이벤트 버블링 차단
+            event.stopPropagation();
             quizHistory = quizHistory.filter(item => item.id !== id);
-            localStorage.setItem('quiz_history_v1', JSON.stringify(quizHistory));
+            localStorage.setItem('quiz_history_v2', JSON.stringify(quizHistory));
             renderHistory();
         }
 
-        // 퀴즈 엔진 상태 초기화
+        // 퀴즈 게임 상태 빌드
         function initQuizSession(cards, title) {
             currentQuizList = [...cards];
             incorrectList = [];
@@ -324,13 +342,12 @@
             setupCardView();
         }
 
-        // 플래시카드 데이터 세팅 및 화면 노출
+        // 플래시카드 화면 데이터 매핑
         function setupCardView() {
             if(currentIndex >= currentQuizList.length) {
                 finishQuizSession();
                 return;
             }
-            // 카드 상태 초기화 (앞면으로)
             document.getElementById('flashcard').classList.remove('flipped');
             
             document.getElementById('progressText').textContent = `${currentIndex + 1} / ${currentQuizList.length}`;
@@ -338,25 +355,24 @@
             document.getElementById('cardBack').textContent = currentQuizList[currentIndex].a;
         }
 
-        // 3D 회전 애니메이션 토글
+        // Card Flip 3D 인터랙션 토글
         function flipCard() {
             document.getElementById('flashcard').classList.toggle('flipped');
         }
 
-        // 알아요/몰라요 답변 판정
+        // 답안 처리 (정답/오답 스택 누적)
         function submitAnswer(isCorrect) {
             if(!isCorrect) {
-                incorrectList.push(currentQuizList[currentIndex]);
+                incorrectList.push(currentQuizList[currentIndex]); // 오답 적립
             }
             currentIndex++;
-            // 약간의 딜레이를 주어 뒤집기가 복구된 후 카드가 바뀌게 처리
             document.getElementById('flashcard').classList.remove('flipped');
             setTimeout(() => {
                 setupCardView();
             }, 200);
         }
 
-        // 한 게임 세션이 끝났을 때
+        // 전체 문항 종료 후 통계 화면
         function finishQuizSession() {
             switchSection('resultSection');
             const score = currentQuizList.length - incorrectList.length;
@@ -365,20 +381,20 @@
             const reviewBtn = document.getElementById('reviewBtn');
             if(incorrectList.length > 0) {
                 reviewBtn.style.display = "inline-block";
-                document.getElementById('resultComment').textContent = `틀린 문항이 ${incorrectList.length}개 있습니다. 복습을 시작해 보세요!`;
+                document.getElementById('resultComment').textContent = `복습이 필요한 문항이 ${incorrectList.length}개 남아있습니다. 다시 도전해 보세요!`;
             } else {
                 reviewBtn.style.display = "none";
-                document.getElementById('resultComment').textContent = "모든 플래시카드를 완벽하게 맞히셨습니다! 🎉";
+                document.getElementById('resultComment').textContent = "축하합니다! 모든 플래시카드를 정복하셨습니다. 🎉";
             }
         }
 
-        // 오답 리스트만 모아서 새로 퀴즈 셋업 (조건 2)
+        // 오답 리스트만 복사해 재시작 (조건 2)
         function startReviewMode() {
             if(incorrectList.length === 0) return;
             initQuizSession(incorrectList, `🔄 오답 복습: ${currentFileName}`);
         }
 
-        // 섹션 전환 유틸리티
+        // 라우팅 섹션 전환 유틸리티
         function switchSection(targetId) {
             document.getElementById('uploadSection').style.display = 'none';
             document.getElementById('loadingSection').style.display = 'none';
@@ -388,7 +404,7 @@
             document.getElementById(targetId).style.display = 'block';
         }
 
-        // 초기 화면 복귀
+        // 초기 홈 화면 세팅 복귀
         function goHome() {
             selectedFile = null;
             document.getElementById('fileInput').value = "";
