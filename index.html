@@ -22,7 +22,7 @@
       align-items: center;
       min-height: 100vh;
       overflow: hidden;
-      touch-action: none; /* 터치 드래그 시 화면 스크롤 방지 */
+      touch-action: none;
     }
 
     /* 컨트롤러 프레임 */
@@ -124,7 +124,7 @@
     /* ON 활성화 상태 */
     .toggle-btn.active {
       color: #ffffff;
-      background: #e74c3c; /* 무기/공격 활성화 표시용 빨간색 */
+      background: #e74c3c;
       box-shadow: 0 0 12px rgba(231, 76, 60, 0.5), 0 2px 0 #c0392b;
       transform: translateY(2px);
     }
@@ -139,7 +139,7 @@
       <input type="range" id="leftSlider" class="vertical-slider" min="-100" max="100" value="0">
     </div>
 
-    <!-- 중앙 패널 (블루투스 연결 & 무기 토글) -->
+    <!-- 중앙 패널 -->
     <div class="center-panel">
       <button class="ble-btn" id="bleBtn" onclick="connectBLE()">CONNECT</button>
       <span class="label">WEAPON</span>
@@ -154,19 +154,17 @@
   </div>
 
   <script>
-    // --- 1. BLE 블루투스 통신 설정 ---
-    // ESP32 아두이노 코드에 설정된 UUID 값과 동일해야 합니다.
     const SERVICE_UUID        = "4fafc201-1fb5-459e-8fcc-c5c9c331914b";
     const CHARACTERISTIC_UUID = "beb5483e-36e1-4688-b7f5-ea07361b26a8";
 
     let bleCharacteristic = null;
 
-    // 블루투스 연결 함수
     async function connectBLE() {
       const bleBtn = document.getElementById('bleBtn');
       try {
+        // 이름 필터를 제거하여 주변의 모든 블루투스 기기(ESP32 포함)를 팝업창에 검색
         const device = await navigator.bluetooth.requestDevice({
-          filters: [{ name: 'BattleRobot_ESP32' }],
+          acceptAllDevices: true,
           optionalServices: [SERVICE_UUID]
         });
 
@@ -176,14 +174,13 @@
 
         bleBtn.textContent = "CONNECTED";
         bleBtn.classList.add('connected');
-        alert("ESP32 연결 성공!");
+        alert("연결 완료: " + (device.name || "알 수 없는 기기"));
       } catch (error) {
         console.error("BLE 연결 에러:", error);
         alert("연결 실패: " + error);
       }
     }
 
-    // ESP32로 데이터를 전송하는 공통 함수
     function sendData(dataStr) {
       if (bleCharacteristic) {
         const encoder = new TextEncoder();
@@ -191,27 +188,23 @@
       }
     }
 
-    // --- 2. 슬라이더 조작 및 복귀 로직 ---
     const leftSlider = document.getElementById('leftSlider');
     const rightSlider = document.getElementById('rightSlider');
     const sliders = [leftSlider, rightSlider];
 
-    // 실시간 이동 값 전송 함수 (예: "DRIVE:50,-80")
     function sendDriveData() {
       const leftVal = leftSlider.value;
       const rightVal = rightSlider.value;
       sendData(`DRIVE:${leftVal},${rightVal}`);
     }
 
-    // 슬라이더를 잡고 움직일 때 실시간 전송
     leftSlider.addEventListener('input', sendDriveData);
     rightSlider.addEventListener('input', sendDriveData);
 
-    // 손을 떼었을 때 위치 복귀 및 정지 데이터(0) 전송
     sliders.forEach(slider => {
       const resetPosition = () => {
         slider.value = 0;
-        sendDriveData(); // 위치가 0으로 돌아갔음을 ESP32에 전송
+        sendDriveData();
       };
 
       slider.addEventListener('pointerup', resetPosition);
@@ -219,15 +212,12 @@
       slider.addEventListener('mouseup', resetPosition);
     });
 
-    // --- 3. 무기/전원 ON/OFF 토글 로직 ---
     function togglePower() {
       const btn = document.getElementById('pwrBtn');
       btn.classList.toggle('active');
       const isOn = btn.classList.contains('active');
       
       btn.textContent = isOn ? 'ON' : 'OFF';
-
-      // ESP32로 무기 상태 전송 (예: "WEAPON:1" 또는 "WEAPON:0")
       sendData(`WEAPON:${isOn ? 1 : 0}`);
     }
   </script>
